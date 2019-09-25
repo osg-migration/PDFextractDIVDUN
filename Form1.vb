@@ -18,15 +18,24 @@ Public Class Form1
 
     Dim overlayLogoDoc As PDFDoc
     Dim CurrentPage, overlayLogoPage As Page
-    Dim clipAccountNumber, clipDocDate, clipNA, clipRA, clipQESP, clipDocType, clipInvoiceNumber As New Rect
+    Dim clipAccountNumber, clipDocDate, clipNA, clipRA, clipQESP, clipDocType, clipInvoiceNumber, clipTotalAmtDue, clipInvoiceDate As New Rect
     Dim HelveticaRegularFont As PDF.Font
 
     Dim nameAddressList, remitAddressList As New StringCollection
 
-    Dim clientCode, CurrentPDFFileName, documentID, accountNumber, docDate, workDir, QESP, pieceID, prevPieceID, docType, invoiceNumber As String
+    Dim clientCode, CurrentPDFFileName, documentID, accountNumber, dueDate, workDir, QESP, pieceID, prevPieceID, docType, invoiceNumber, totalDue As String
     Dim docNumber, currentPageNumber, origPageNumber, docPageCount, StartingPage, totalPages, pageTotal As Integer
     Dim selectBRE As Boolean
     Dim cancelledFlag As Boolean = False
+    Dim OSG As Boolean = True
+
+    Dim enc As Encoding = Encoding.Default
+    Dim xmlOut As XmlTextWriter
+
+    'Insertion of PDF images/objects (Remove if no images/messages are being added to the PDF)
+    Dim overlayFrontDoc, overlayBackDoc As PDFDoc
+    Dim overlayFrontPage, overlayBackPage As Page
+    Dim XObjects As Dictionary(Of String, Element)
 
     Structure TextAndStyle
         Public text As String
@@ -43,9 +52,13 @@ Public Class Form1
     End Sub
 
     Private Sub Form1_Disposed(ByVal sender As Object, ByVal e As System.EventArgs) Handles Me.Disposed
-        If (Environment.ExitCode = 0) And FRMW.parse("{NormalTermination}") <> "YES" Then
+        If (OSG) Then
+            If (Environment.ExitCode = 0) And FRMW.parse("{NormalTermination}") <> "YES" Then
+                cancelledFlag = True
+                Throw New Exception("Program was cancelled while executing")
+            End If
+        Else
             cancelledFlag = True
-            Throw New Exception("Program was cancelled while executing")
         End If
     End Sub
 
@@ -73,6 +86,7 @@ Public Class Form1
     Private Sub standardProcessing()
         Dim licenseKey As String
         Dim docuFileName As String
+        Dim swSLCTFileName As String = ""
 
         FRMW = New FRMW.FRMW
         lblEXE.Text = Application.ExecutablePath
@@ -80,13 +94,28 @@ Public Class Form1
         convLog = New ConversionLog.ConversionLog("PDFextractDIVCTS")
         DOCU = New DOCU.DOCU
 
-        FRMW.loadFrameworkApplicationConfigFile("PDFEXTRACT")
-        licenseKey = FRMW.getJOBparameter("PDFTRONLICENSELEY")
-        docuFileName = FRMW.getParameter("PDFEXTRACT.outputDOCUfile")
-        CurrentPDFFileName = FRMW.getParameter("PDFEXTRACT.inputPDFfile")
-        clientCode = FRMW.getParameter("CLIENTCODE")
-        workDir = FRMW.getParameter("WORKDIR")
-        swSLCT = New StreamWriter(FRMW.getParameter("PDFEXTRACT.OUTPUTSLCTFILE"), False, Encoding.Default)
+        If (OSG) Then
+            FRMW.loadFrameworkApplicationConfigFile("PDFEXTRACT")
+            licenseKey = FRMW.getJOBparameter("PDFTRONLICENSELEY")
+            docuFileName = FRMW.getParameter("PDFEXTRACT.outputDOCUfile")
+            CurrentPDFFileName = FRMW.getParameter("PDFEXTRACT.inputPDFfile")
+            swSLCTFileName = FRMW.getParameter("PDFEXTRACT.OUTPUTSLCTFILE")
+            clientCode = FRMW.getParameter("CLIENTCODE")
+            workDir = FRMW.getParameter("WORKDIR")
+        Else
+            CurrentPDFFileName = "D:\OSG\Github\PDFextractDIVDUN\DIVDUN-Invoices.pdf"
+            clientCode = "DIVDUN"
+            licenseKey = "OSG Billing Services(osgbilling.com):ENTCPU:1::W:AMS(20140622):8E4F78C23CAFD6B962824007400DD29C15AD420D33446C5017F1E6BEF5C7"
+            docuFileName = "D:\OSG\Github\PDFextractDIVDUN\OutPut\swdocu.txt"
+            swSLCTFileName = "D:\OSG\Github\PDFextractDIVDUN\OutPut\swSLCT.txt"
+            workDir = "D:\OSG\Github\PDFextractDIVDUN\OutPut"
+            xmlOut = New XmlTextWriter("D:\OSG\Github\PDFextractDIVDUN\OutPut\result.xml", enc)
+            xmlOut.Formatting = Formatting.Indented
+            xmlOut.WriteStartDocument()
+            xmlOut.WriteStartElement("DOCS")
+        End If
+
+        swSLCT = New StreamWriter(swSLCTFileName, False, Encoding.Default)
         swDOCU = New StreamWriter(docuFileName, False, Encoding.Default)
         PDFNet.Initialize(licenseKey)
 
@@ -95,11 +124,18 @@ Public Class Form1
         ProcessPDF()
 
         swDOCU.Flush() : swDOCU.Close()
-        swSLCT.Flush() : swSLCT.Close()
+        If (OSG) Then
+            swSLCT.Flush() : swSLCT.Close()
+        End If
         PDFNet.Terminate()
 
-        convLog.ZIPandCopy()
-        FRMW.StandardTermination()
+        If (OSG) Then
+            convLog.ZIPandCopy()
+            FRMW.StandardTermination()
+        Else
+            xmlOut.WriteEndDocument()
+            xmlOut.Flush() : xmlOut.Close()
+        End If
         Application.Exit()
 
     End Sub
@@ -127,14 +163,18 @@ Public Class Form1
             writeDOCUrecord(totalPages)
 
             status("Processing PDF page (" & origPageNumber.ToString & "); Saving Output PDF...")
-            inDoc.Save(FRMW.getParameter("PDFExtract.OutputPDFFile"), SDF.SDFDoc.SaveOptions.e_compatibility + SDF.SDFDoc.SaveOptions.e_remove_unused)
+            If (OSG) Then
+                inDoc.Save(FRMW.getParameter("PDFExtract.OutputPDFFile"), SDF.SDFDoc.SaveOptions.e_compatibility + SDF.SDFDoc.SaveOptions.e_remove_unused)
+            Else
+                inDoc.Save("D:\OSG\Github\PDFextractDIVDUN\OutPut\updated.pdf", SDF.SDFDoc.SaveOptions.e_compatibility + SDF.SDFDoc.SaveOptions.e_remove_unused)
+            End If
 
         End Using
 
     End Sub
 
     Private Sub ClearValues()
-        accountNumber = "" : docDate = ""
+        accountNumber = "" : dueDate = "" : totalDue = ""
         nameAddressList = New StringCollection
         remitAddressList = New StringCollection
         totalPages = 0 : docPageCount = 1
@@ -163,8 +203,22 @@ Public Class Form1
                 prevPieceID = pieceID
             End If
         End If
+        If (QESP.Contains("QESP")) Then   'There are record having more htan one pages and total amount due is on last page. THis code added to handle this situation
+            Dim tempColl As StringCollection = GetPDFpageValues(clipTotalAmtDue)
+            If (tempColl.Count > 0) Then
+                Dim totalDueTemp = tempColl(tempColl.Count - 1).ToString
+                If (Not String.IsNullOrEmpty(totalDueTemp)) Then
+                    Dim tempDec As Decimal
+                    If Decimal.TryParse(totalDueTemp.Replace("$", ""), tempDec) Then
+                        totalDue = totalDueTemp
+                    End If
+                End If
+            End If
 
-        AdjustPagePosition(CurrentPage, -0.25, 0)
+        End If
+
+
+        'AdjustPagePosition(CurrentPage, -0.25, 0)
 
         prevPieceID = pieceID
         totalPages += 1
@@ -186,10 +240,12 @@ Public Class Form1
         tempColl = GetPDFpageValues(clipInvoiceNumber)
         invoiceNumber = tempColl(tempColl.Count - 1).ToString
 
-        tempColl = GetPDFpageValues(clipDocDate)
-        docDate = tempColl(tempColl.Count - 1).ToString
 
-        docType = GetPDFpageValue(clipDocType)
+
+        tempColl = GetPDFpageValues(clipInvoiceDate)
+        dueDate = tempColl(tempColl.Count - 1).ToString
+
+        'docType = GetPDFpageValue(clipDocType)
         nameAddressList = GetPDFpageValues(clipNA)
         remitAddressList = GetPDFpageValues(clipRA)
         StartingPage = currentPageNumber
@@ -198,13 +254,12 @@ Public Class Form1
         CreateSLCTentry()
 
         'Check values
-        Dim tempDate As Date
+        Dim tempDate As Date, tempDec As Decimal
         If accountNumber = "" Then Throw New Exception(convLog.addError("Account number not found", accountNumber, "123456789", "File: " & Path.GetFileName(CurrentPDFFileName) & " " & "Page " & origPageNumber))
-        If docType = "" Then Throw New Exception(convLog.addError("Document type not found", docType, , "File: " & Path.GetFileName(CurrentPDFFileName) & " " & "Page " & origPageNumber))
+        ' If docType = "" Then Throw New Exception(convLog.addError("Document type not found", docType, , "File: " & Path.GetFileName(CurrentPDFFileName) & " " & "Page " & origPageNumber))
         If invoiceNumber = "" Then Throw New Exception(convLog.addError("Invoice number not found", invoiceNumber, , "File: " & Path.GetFileName(CurrentPDFFileName) & " " & "Page " & origPageNumber))
-        If Not Date.TryParse(docDate, tempDate) Then Throw New Exception(convLog.addError("Could not parse document date", docDate, "01/01/2016", "File: " & Path.GetFileName(CurrentPDFFileName) & " " & "Page " & origPageNumber))
+        If Not Date.TryParse(dueDate, tempDate) Then Throw New Exception(convLog.addError("Could not parse Invoice due date", dueDate, "01/01/2016", "File: " & Path.GetFileName(CurrentPDFFileName) & " " & "Page " & origPageNumber))
         If nameAddressList.Count = 0 Then Throw New Exception(convLog.addError("No name and address found", , , "File: " & Path.GetFileName(CurrentPDFFileName) & " " & "Page " & origPageNumber))
-
         'White Out Address Box
         WhiteOutContentBox(0, 8, 4, 1.25, , , , 1)
 
@@ -239,36 +294,43 @@ Public Class Form1
 
     Private Sub SetParsingCoordinates()
 
-        clipAccountNumber.x1 = I2P(4.1)
-        clipAccountNumber.y1 = I2P(10.15)
-        clipAccountNumber.x2 = (clipAccountNumber.x1 + I2P(1))
-        clipAccountNumber.y2 = (clipAccountNumber.y1 + I2P(0.3))
-
-        clipInvoiceNumber.x1 = I2P(6.3)
-        clipInvoiceNumber.y1 = I2P(10.15)
-        clipInvoiceNumber.x2 = (clipInvoiceNumber.x1 + I2P(0.75))
-        clipInvoiceNumber.y2 = (clipInvoiceNumber.y1 + I2P(0.3))
-
-        clipDocDate.x1 = I2P(7.6)
-        clipDocDate.y1 = I2P(10.15)
-        clipDocDate.x2 = (clipDocDate.x1 + I2P(0.65))
-        clipDocDate.y2 = (clipDocDate.y1 + I2P(0.3))
-
-        clipDocType.x1 = I2P(5.5)
-        clipDocType.y1 = I2P(10.5)
-        clipDocType.x2 = (clipDocType.x1 + I2P(3))
-        clipDocType.y2 = (clipDocType.y1 + I2P(0.5))
-
         clipNA.x1 = I2P(0.6)
         clipNA.y1 = I2P(8)
         clipNA.x2 = (clipNA.x1 + I2P(3.75))
         clipNA.y2 = (clipNA.y1 + I2P(1.25))
 
+        clipAccountNumber.x1 = I2P(5.59)
+        clipAccountNumber.y1 = I2P(10.17)
+        clipAccountNumber.x2 = (clipAccountNumber.x1 + I2P(0.83))
+        clipAccountNumber.y2 = (clipAccountNumber.y1 + I2P(0.2))
+
+        clipInvoiceNumber.x1 = I2P(7.42)
+        clipInvoiceNumber.y1 = I2P(10.18)
+        clipInvoiceNumber.x2 = (clipInvoiceNumber.x1 + I2P(0.78))
+        clipInvoiceNumber.y2 = (clipInvoiceNumber.y1 + I2P(0.17))
+
+        clipInvoiceDate.x1 = I2P(6.55)
+        clipInvoiceDate.y1 = I2P(10.17)
+        clipInvoiceDate.x2 = (clipInvoiceDate.x1 + I2P(0.8))
+        clipInvoiceDate.y2 = (clipInvoiceDate.y1 + I2P(0.21))
+
+        clipTotalAmtDue.x1 = I2P(6.76)
+        clipTotalAmtDue.y1 = I2P(1.39)
+        clipTotalAmtDue.x2 = (clipTotalAmtDue.x1 + I2P(1.12))
+        clipTotalAmtDue.y2 = (clipTotalAmtDue.y1 + I2P(0.33))
+
         'QESP Line
-        clipQESP.x1 = I2P(0.5)
-        clipQESP.y1 = I2P(0.15)
-        clipQESP.x2 = (clipQESP.x1 + I2P(3))
-        clipQESP.y2 = (clipQESP.y1 + I2P(0.15))
+        clipQESP.x1 = I2P(0.54)
+        clipQESP.y1 = I2P(7.55)
+        clipQESP.x2 = (clipQESP.x1 + I2P(1.55))
+        clipQESP.y2 = (clipQESP.y1 + I2P(0.17))
+
+        clipRA.x1 = I2P(4.81)
+        clipRA.y1 = I2P(8.25)
+        clipRA.x2 = (clipRA.x1 + I2P(2.81))
+        clipRA.y2 = (clipRA.y1 + I2P(0.42))
+
+
 
         CreateCropPage()
 
@@ -276,22 +338,39 @@ Public Class Form1
 
     Private Sub CreateCropPage()
 
-        Using cropDoc As New PDFDoc()
-            Dim page As Page = cropDoc.PageCreate(New Rect(0, 0, 612, 792))
-            cropDoc.PageInsert(cropDoc.GetPageIterator(0), page)
-            page = cropDoc.GetPage(1)
+        Dim cropDoc As PDFDoc
+        Dim cropPDF As String = "" '
+        If (OSG) Then
+            cropPDF = FRMW.getParameter("WORKDIR") & "\crop.pdf"
+        Else
+            cropPDF = "D:\OSG\Github\PDFextractDIVDUN\OutPut" & "\crop.pdf"
+        End If
 
-            'Remove x1 value from x2 for crop box creation
-            CreateCropBox("ACCOUNT NUMBER", clipAccountNumber.x1, clipAccountNumber.y1, (clipAccountNumber.x2 - clipAccountNumber.x1), (clipAccountNumber.y2 - clipAccountNumber.y1), page, cropDoc)
-            CreateCropBox("DOCUMENT DATE", clipDocDate.x1, clipDocDate.y1, (clipDocDate.x2 - clipDocDate.x1), (clipDocDate.y2 - clipDocDate.y1), page, cropDoc)
-            CreateCropBox("DOC TYPE", clipDocType.x1, clipDocType.y1, (clipDocType.x2 - clipDocType.x1), (clipDocType.y2 - clipDocType.y1), page, cropDoc)
-            CreateCropBox("INVOICE NUMBER", clipInvoiceNumber.x1, clipInvoiceNumber.y1, (clipInvoiceNumber.x2 - clipInvoiceNumber.x1), (clipInvoiceNumber.y2 - clipInvoiceNumber.y1), page, cropDoc)
-            CreateCropBox("NAME & ADDRESS", clipNA.x1, clipNA.y1, (clipNA.x2 - clipNA.x1), (clipNA.y2 - clipNA.y1), page, cropDoc)
-            CreateCropBox("QESP STRING", clipQESP.x1, clipQESP.y1, (clipQESP.x2 - clipQESP.x1), (clipQESP.y2 - clipQESP.y1), page, cropDoc)
+        If (OSG) Then
+            cropDoc = New PDFDoc()
+        Else
+            cropDoc = New PDFDoc("D:\OSG\Github\PDFextractDIVDUN\DIVDUN-Invoices.pdf")
+        End If
+        cropDoc.Save(cropPDF, SDF.SDFDoc.SaveOptions.e_compatibility + SDF.SDFDoc.SaveOptions.e_remove_unused)
 
-            cropDoc.Save(FRMW.getParameter("WORKDIR") & "\crop.pdf", SDF.SDFDoc.SaveOptions.e_compatibility + SDF.SDFDoc.SaveOptions.e_remove_unused)
-        End Using
+        Dim page As Page = cropDoc.PageCreate(New Rect(0, 0, 612, 792))
+        cropDoc.PageInsert(cropDoc.GetPageIterator(0), page)
+        page = cropDoc.GetPage(1)
 
+        'Remove x1 value from x2 for crop box creation
+        CreateCropBox("ACCOUNT NUMBER", clipAccountNumber.x1, clipAccountNumber.y1, (clipAccountNumber.x2 - clipAccountNumber.x1), (clipAccountNumber.y2 - clipAccountNumber.y1), page, cropDoc)
+        CreateCropBox("INVOICE DATE", clipInvoiceDate.x1, clipInvoiceDate.y1, (clipInvoiceDate.x2 - clipInvoiceDate.x1), (clipInvoiceDate.y2 - clipInvoiceDate.y1), page, cropDoc)
+        'CreateCropBox("DOCUMENT DATE", clipDocDate.x1, clipDocDate.y1, (clipDocDate.x2 - clipDocDate.x1), (clipDocDate.y2 - clipDocDate.y1), page, cropDoc)
+        'CreateCropBox("DOC TYPE", clipDocType.x1, clipDocType.y1, (clipDocType.x2 - clipDocType.x1), (clipDocType.y2 - clipDocType.y1), page, cropDoc)
+        CreateCropBox("INVOICE NUMBER", clipInvoiceNumber.x1, clipInvoiceNumber.y1, (clipInvoiceNumber.x2 - clipInvoiceNumber.x1), (clipInvoiceNumber.y2 - clipInvoiceNumber.y1), page, cropDoc)
+        CreateCropBox("AMOUNT DUE", clipTotalAmtDue.x1, clipTotalAmtDue.y1, (clipTotalAmtDue.x2 - clipTotalAmtDue.x1), (clipTotalAmtDue.y2 - clipTotalAmtDue.y1), page, cropDoc)
+        CreateCropBox("NAME & ADDRESS", clipNA.x1, clipNA.y1, (clipNA.x2 - clipNA.x1), (clipNA.y2 - clipNA.y1), page, cropDoc)
+        CreateCropBox("REMIT ADDRESS", clipRA.x1, clipRA.y1, (clipRA.x2 - clipRA.x1), (clipRA.y2 - clipRA.y1), page, cropDoc)
+        CreateCropBox("QESP STRING", clipQESP.x1, clipQESP.y1, (clipQESP.x2 - clipQESP.x1), (clipQESP.y2 - clipQESP.y1), page, cropDoc)
+
+
+        cropDoc.Save(cropPDF, SDF.SDFDoc.SaveOptions.e_compatibility + SDF.SDFDoc.SaveOptions.e_remove_unused)
+        cropDoc.Close()
     End Sub
 
     Private Sub CreateCropBox(ByVal labelValue As String, ByVal x1Val As Double, ByVal y1Val As Double, ByVal x2Val As Double, ByVal y2Val As Double, ByVal PDFpage As Page, cropDoc As PDFDoc, Optional color1 As Double = 0.75, Optional color2 As Double = 0.75, Optional color3 As Double = 0.75, Optional opac As Double = 0.5)
@@ -466,7 +545,7 @@ Public Class Form1
             Case "R"
                 element.SetTextMatrix(1, 0, 0, 1, I2P(xPosition) - element.GetTextLength, I2P(yPosition))
             Case Else
-        element.SetTextMatrix(1, 0, 0, 1, I2P(xPosition), I2P(yPosition))
+                element.SetTextMatrix(1, 0, 0, 1, I2P(xPosition), I2P(yPosition))
         End Select
         writer.WriteElement(element)
         writer.WriteElement(eb.CreateTextEnd())
@@ -516,12 +595,18 @@ Public Class Form1
 #Region "Global Functions/Routines"
 
     Private Sub writeDOCUrecord(totalPages As Integer)
+        Dim tempDec As Decimal
+        If Not Decimal.TryParse(totalDue.Replace("$", ""), tempDec) Then Throw New Exception(convLog.addError("Could not parse total due amount", totalDue, "$123.45", "File: " & Path.GetFileName(CurrentPDFFileName) & " " & "Page " & currentPageNumber))
+
         DOCU.Clear()
         DOCU.AccountNumber = accountNumber
+        DOCU.CustomerNumber = accountNumber
         DOCU.DocumentID = documentID
+        DOCU.AmountDue = totalDue
         DOCU.ClientCode = clientCode
-        DOCU.DocumentDate = fmtDate(docDate, "yyyy/MM/dd")
-        DOCU.DocumentType = docType
+        DOCU.DocumentDueDate = fmtDate(dueDate, "yyyy/MM/dd")
+        DOCU.DocumentDate = fmtDate(Date.Now.ToString("MM/dd/yy"), "yyyy/MM/dd")
+        DOCU.DocumentType = ""    ' docType
         DOCU.DocumentKey = ""
         DOCU.Print_StartPage = StartingPage
         DOCU.Print_NumberOfPages = totalPages
@@ -532,10 +617,62 @@ Public Class Form1
         nameAddressList(0) = "" 'Set mailing ID to blank
         removeLastAddressLine(nameAddressList) 'Remove IMB data
         DOCU.setOriginalAddress(CollectionToArray(nameAddressList, 5), 1, False)
-
-        swDOCU.WriteLine(DOCU.GetXML)
+        remitAddressList.RemoveAt(0)
+        DOCU.setRemitAddress(CollectionToArray(remitAddressList, 3))
+        If (OSG) Then
+            swDOCU.WriteLine(DOCU.GetXML)
+        Else
+            CreateDocumentNode()
+        End If
     End Sub
-
+    Public Sub CreateDocumentNode()
+        xmlOut.WriteStartElement("DOC") '<DOC>
+        xmlOut.WriteAttributeString("documentId", DOCU.DocumentID)
+        xmlOut.WriteStartElement("DOCUMENT")
+        xmlOut.WriteAttributeString("documentId", DOCU.DocumentID)
+        xmlOut.WriteAttributeString("clientCode", DOCU.ClientCode)
+        xmlOut.WriteAttributeString("billerCode", "")
+        xmlOut.WriteAttributeString("merchantCode", "")
+        xmlOut.WriteAttributeString("accountNumber", DOCU.AccountNumber)
+        xmlOut.WriteAttributeString("customerNumber", DOCU.CustomerNumber)
+        xmlOut.WriteAttributeString("documentType", "Statement")
+        xmlOut.WriteAttributeString("documentKey", "")
+        xmlOut.WriteAttributeString("documentDate", DOCU.DocumentDate)
+        xmlOut.WriteAttributeString("documentDueDate", DOCU.DocumentDueDate)
+        xmlOut.WriteAttributeString("amountDue", DOCU.AmountDue)
+        xmlOut.WriteAttributeString("enrollmentToken", DOCU.EnrollmentToken)
+        xmlOut.WriteAttributeString("enrollmentToken2", DOCU.EnrollmentToken2)
+        xmlOut.WriteAttributeString("sequenceNumber", "")
+        xmlOut.WriteAttributeString("externalDocumentId", DOCU.ExternalDocumentID)
+        xmlOut.WriteAttributeString("DPBC", "")
+        xmlOut.WriteAttributeString("IMB", "")
+        xmlOut.WriteAttributeString("address1", DOCU.OriginalAddress(0))
+        xmlOut.WriteAttributeString("address2", DOCU.OriginalAddress(1))
+        xmlOut.WriteAttributeString("address3", DOCU.OriginalAddress(2))
+        xmlOut.WriteAttributeString("address4", DOCU.OriginalAddress(3))
+        xmlOut.WriteAttributeString("address5", DOCU.OriginalAddress(4))
+        xmlOut.WriteAttributeString("address6", DOCU.OriginalAddress(5))
+        xmlOut.WriteAttributeString("remitDPBC", DOCU.RemitDPBC)
+        xmlOut.WriteAttributeString("remitIMB", "")
+        xmlOut.WriteAttributeString("remitAddress1", DOCU.RemitAddress(0))
+        xmlOut.WriteAttributeString("remitAddress2", DOCU.RemitAddress(1))
+        xmlOut.WriteAttributeString("remitAddress3", DOCU.RemitAddress(2))
+        xmlOut.WriteAttributeString("remitAddress4", DOCU.RemitAddress(3))
+        xmlOut.WriteAttributeString("mailClass", "")
+        xmlOut.WriteAttributeString("handlingCode", "")
+        xmlOut.WriteAttributeString("locationCode", "")
+        xmlOut.WriteAttributeString("groupCode1", "")
+        xmlOut.WriteAttributeString("groupCode2", "")
+        xmlOut.WriteAttributeString("groupCode3", "")
+        xmlOut.WriteAttributeString("UDF1", "")
+        xmlOut.WriteAttributeString("UDF2", "")
+        xmlOut.WriteAttributeString("UDF3", "")
+        xmlOut.WriteAttributeString("UDF4", "")
+        xmlOut.WriteAttributeString("UDF5", "")
+        xmlOut.WriteAttributeString("PrintNumberOfPages", DOCU.Print_NumberOfPages)
+        xmlOut.WriteEndElement()
+        xmlOut.WriteEndElement() '</DOC> 
+    End Sub
     Private Sub removeLastAddressLine(addressList As StringCollection)
         Dim addressLine As String = addressList(addressList.Count - 1)
         addressLine = addressLine.Replace("A", "").Replace("D", "").Replace("F", "").Replace("T", "")
